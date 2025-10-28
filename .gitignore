@@ -1,0 +1,8 @@
+build/*
+node_modules/*
+packages/staking/build/*
+packages/nft/build/*
+.env
+.DS_Store
+.vscode/
+.idea/

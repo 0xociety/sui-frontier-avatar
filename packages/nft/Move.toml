@@ -1,0 +1,25 @@
+[package]
+name = "xociety_nft"
+edition = "2024.beta"
+
+[dependencies]
+# Sui framework
+# For devnet: rev = "framework/testnet" (matches local kiosk)
+# For testnet: rev = "testnet"
+# For mainnet: rev = "mainnet"
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
+
+# Kiosk package for standard royalty_rule (TradePort compatible)
+# For devnet: use local kiosk
+# For testnet/mainnet: use published kiosk (git)
+# Note: Published kiosk only available on testnet/mainnet (not devnet)
+# Kiosk = { local = "../../../kiosk-course/2-royalties/move/kiosk" }
+Kiosk = { git = "https://github.com/MystenLabs/apps.git", subdir = "kiosk", rev = "testnet" }
+
+
+[addresses]
+xociety_nft = "0x0"
+
+[dev-dependencies]
+
+[dev-addresses]
