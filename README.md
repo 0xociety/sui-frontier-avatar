@@ -74,6 +74,22 @@ sui move test --filter integration
 - Concurrent staking by multiple users
 - Operation restrictions during pause state
 
-## 📝 License
+## Package Deployed
 
-This project is owned by Xociety.
+<table>
+<tr>
+<th>Network</th>
+<th>NFT collection</th>
+<th>Staking</th>
+</tr>
+<tr>
+<td>Testnet</td>
+<td><code>0xcc0a65fd56d6c6d2386f91565052f9384073a692e24f7de2f5447e1ef6c07830</code></td>
+<td><code>0x5c365d8cba5c5981e3713ac68a527d4eb90472092a8e7285bb68832f4d5aa213</code></td>
+</tr>
+<tr>
+<td>Mainnet</td>
+<td><code>NOT DEPLOYED YET</code></td>
+<td><code>NOT DEPLOYED YET</code></td>
+</tr>
+</table>
