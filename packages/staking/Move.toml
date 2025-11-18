@@ -5,6 +5,8 @@ edition = "2024.beta"
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
 xociety_nft = { local = "../nft", override = true }
+Kiosk = { git = "https://github.com/MystenLabs/apps.git", subdir = "kiosk", rev = "testnet" }
+multisig = { git = "https://github.com/MystenLabs/multisig-move.git", subdir = "move", rev = "main" }
 
 [addresses]
 xociety_staking = "0x0"

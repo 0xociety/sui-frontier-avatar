@@ -4,17 +4,19 @@ edition = "2024.beta"
 
 [dependencies]
 # Sui framework
-# For devnet: rev = "framework/testnet" (matches local kiosk)
+# For devnet: rev = "framework/devnet"
 # For testnet: rev = "testnet"
 # For mainnet: rev = "mainnet"
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet", override = true }
 
 # Kiosk package for standard royalty_rule (TradePort compatible)
-# For devnet: use local kiosk
+# For devnet: use local kiosk (published kiosk not available on devnet)
 # For testnet/mainnet: use published kiosk (git)
-# Note: Published kiosk only available on testnet/mainnet (not devnet)
 # Kiosk = { local = "../../../kiosk-course/2-royalties/move/kiosk" }
 Kiosk = { git = "https://github.com/MystenLabs/apps.git", subdir = "kiosk", rev = "testnet" }
+
+# MultiSig package
+multisig = { git = "https://github.com/MystenLabs/multisig-move.git", subdir = "move", rev = "main" }
 
 
 [addresses]

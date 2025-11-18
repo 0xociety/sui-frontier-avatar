@@ -1,5 +1,6 @@
 module xociety_staking::stake_frontier;
 
+use multisig::multisig;
 use sui::clock::{Self, Clock};
 use sui::dynamic_object_field as dof;
 use sui::event;
@@ -11,12 +12,13 @@ use xociety_nft::xociety_frontier::{Self, XocietyFrontier};
 const EAlreadyStaked: u64 = 0;
 const ENotStaked: u64 = 1;
 const ENotStaker: u64 = 2;
-const EStakingPaused: u64 = 3; // Staking is paused
-const EMaxStakeCountExceeded: u64 = 4; // Exceeded maximum stake count per user
-const ENotAdmin: u64 = 5; /// Not an admin
-const EEmptyTokens: u64 = 6; // Empty vector passed as argument
-const EInputLengthMismatch: u64 = 7; // Input vectors have different lengths
-const ELastAdminCap: u64 = 8; /// Error when attempting to remove the last AdminCap
+const EStakingPaused: u64 = 3;
+const EMaxStakeCountExceeded: u64 = 4;
+const EEmptyTokens: u64 = 5;
+const EInputLengthMismatch: u64 = 6;
+const ENotMultiSigSender: u64 = 7;
+const EMultiSigNotConfigured: u64 = 8;
+const ENotAdmin: u64 = 9;
 
 public struct STAKE_FRONTIER has drop {}
 
@@ -75,6 +77,19 @@ public struct CapEvent has copy, drop {
   recipient: option::Option<address>, // recipient on creation (none on removal)
 }
 
+/// Max stake per user changed event
+public struct MaxStakePerUserChanged has copy, drop {
+  old_value: u64,
+  new_value: u64,
+  actor: address,
+}
+
+/// Pause state changed event
+public struct PauseStateChanged has copy, drop {
+  is_paused: bool,
+  actor: address,
+}
+
 public struct StakingPool has key {
   id: UID,
   is_paused: bool,
@@ -82,7 +97,11 @@ public struct StakingPool has key {
   staked_nfts: LinkedTable<ID, StakedNft>,
   staker_to_nfts: Table<address, LinkedTable<ID, bool>>,
   staker_nft_counts: Table<address, u64>,
-  admin_cap_count: u64,
+  // Multisig configuration
+  multisig_configured: bool,
+  multisig_pks: vector<vector<u8>>,
+  multisig_weights: vector<u8>,
+  multisig_threshold: u16,
 }
 
 fun init(_otw: STAKE_FRONTIER, ctx: &mut TxContext) {
@@ -93,7 +112,10 @@ fun init(_otw: STAKE_FRONTIER, ctx: &mut TxContext) {
     staked_nfts: linked_table::new(ctx),
     staker_to_nfts: table::new(ctx),
     staker_nft_counts: table::new(ctx),
-    admin_cap_count: 1,
+    multisig_configured: false,
+    multisig_pks: vector::empty(),
+    multisig_weights: vector::empty(),
+    multisig_threshold: 0,
   };
 
   let pool_id = object::id(&pool);
@@ -256,6 +278,7 @@ public fun admin_stake(
   mut stake_timestamps_ms: vector<u64>,
   ctx: &mut TxContext,
 ) {
+  verify_multisig_sender(pool, ctx);
   assert!(object::id(pool) == cap.pool_id, ENotAdmin);
   assert!(!pool.is_paused, EStakingPaused);
   let num_nfts = vector::length(&nfts);
@@ -315,67 +338,99 @@ public fun admin_stake(
   vector::destroy_empty(stake_timestamps_ms);
 }
 
-public fun pause(pool: &mut StakingPool, cap: &AdminCap) {
+public fun pause(pool: &mut StakingPool, cap: &AdminCap, ctx: &TxContext) {
+  verify_multisig_sender(pool, ctx);
   assert!(object::id(pool) == cap.pool_id, ENotAdmin);
   pool.is_paused = true;
+
+  event::emit(PauseStateChanged {
+    is_paused: true,
+    actor: tx_context::sender(ctx),
+  });
 }
 
-public fun unpause(pool: &mut StakingPool, cap: &AdminCap) {
+public fun unpause(pool: &mut StakingPool, cap: &AdminCap, ctx: &TxContext) {
+  verify_multisig_sender(pool, ctx);
   assert!(object::id(pool) == cap.pool_id, ENotAdmin);
   pool.is_paused = false;
+
+  event::emit(PauseStateChanged {
+    is_paused: false,
+    actor: tx_context::sender(ctx),
+  });
 }
 
 // Set maximum stake count per user
-public fun set_max_stake_per_user(pool: &mut StakingPool, cap: &AdminCap, new_count: u64) {
-  assert!(object::id(pool) == cap.pool_id, ENotAdmin);
-  pool.max_stake_per_user = new_count;
-}
-
-public fun add_admin(
+public fun set_max_stake_per_user(
   pool: &mut StakingPool,
   cap: &AdminCap,
-  new_admin: address,
-  ctx: &mut TxContext,
+  new_count: u64,
+  ctx: &TxContext,
 ) {
+  verify_multisig_sender(pool, ctx);
   assert!(object::id(pool) == cap.pool_id, ENotAdmin);
-  let new_admin_cap = AdminCap {
-    id: object::new(ctx),
-    pool_id: cap.pool_id,
-  };
+  let old_count = pool.max_stake_per_user;
+  pool.max_stake_per_user = new_count;
 
-  pool.admin_cap_count = pool.admin_cap_count + 1;
-
-  event::emit(CapEvent {
-    cap_type: std::string::utf8(b"AdminCap"),
-    action: std::string::utf8(b"created"),
-    cap_id: object::id(&new_admin_cap),
+  event::emit(MaxStakePerUserChanged {
+    old_value: old_count,
+    new_value: new_count,
     actor: tx_context::sender(ctx),
-    recipient: option::some(new_admin),
   });
-
-  transfer::public_transfer(new_admin_cap, new_admin);
 }
 
-public fun remove_admin(pool: &mut StakingPool, cap: AdminCap, ctx: &TxContext) {
-  assert!(object::id(pool) == cap.pool_id, ENotAdmin);
-  // Ensure at least one AdminCap remains
-  assert!(pool.admin_cap_count > 1, ELastAdminCap);
+// --- MultiSig Functions ---
+/// Transfer AdminCap to another address (e.g., multisig address)
+public fun transfer_admin_cap(cap: AdminCap, recipient: address) {
+  transfer::transfer(cap, recipient);
+}
 
-  let cap_id = object::id(&cap);
-  let actor = tx_context::sender(ctx);
+/// Verify that the sender is the registered multisig address
+fun verify_multisig_sender(pool: &StakingPool, ctx: &TxContext) {
+  assert!(pool.multisig_configured, EMultiSigNotConfigured);
 
-  pool.admin_cap_count = pool.admin_cap_count - 1;
+  let expected = multisig::derive_multisig_address_quiet(
+    pool.multisig_pks,
+    pool.multisig_weights,
+    pool.multisig_threshold,
+  );
 
-  event::emit(CapEvent {
-    cap_type: std::string::utf8(b"AdminCap"),
-    action: std::string::utf8(b"removed"),
-    cap_id,
-    actor,
-    recipient: option::none(),
-  });
+  assert!(ctx.sender() == expected, ENotMultiSigSender);
+}
 
-  let AdminCap { id, pool_id: _ } = cap;
-  object::delete(id);
+/// Configure multisig settings
+public fun set_multisig_config(
+  pool: &mut StakingPool,
+  _cap: &AdminCap,
+  pks: vector<vector<u8>>,
+  weights: vector<u8>,
+  threshold: u16,
+  ctx: &TxContext,
+) {
+  // If multisig is already configured, require multisig verification to change it
+  if (pool.multisig_configured) {
+    verify_multisig_sender(pool, ctx);
+  };
+
+  pool.multisig_pks = pks;
+  pool.multisig_weights = weights;
+  pool.multisig_threshold = threshold;
+  pool.multisig_configured = true;
+}
+
+/// Get the derived multisig address
+public fun get_multisig_address(pool: &StakingPool): address {
+  assert!(pool.multisig_configured, EMultiSigNotConfigured);
+  multisig::derive_multisig_address_quiet(
+    pool.multisig_pks,
+    pool.multisig_weights,
+    pool.multisig_threshold,
+  )
+}
+
+/// Check if multisig is configured
+public fun is_multisig_configured(pool: &StakingPool): bool {
+  pool.multisig_configured
 }
 
 // --- View Functions ---
@@ -451,6 +506,11 @@ public fun get_user_stakes(pool: &StakingPool, user: address): vector<UserStakeI
 #[test_only]
 public fun test_init(otw: STAKE_FRONTIER, ctx: &mut TxContext) {
   init(otw, ctx);
+}
+
+#[test_only]
+public fun transfer_admin_cap_for_testing(cap: AdminCap, recipient: address) {
+  transfer::transfer(cap, recipient);
 }
 
 #[test_only]
