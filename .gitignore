@@ -6,3 +6,5 @@ packages/nft/build/*
 .DS_Store
 .vscode/
 .idea/
+packages/nft/*.lock
+packages/staking/*.lock
