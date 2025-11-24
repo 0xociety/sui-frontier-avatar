@@ -372,3 +372,460 @@ fun test_exceed_max_stake_fails() {
 }
 
 // Admin management tests removed - now using multisig authentication instead
+
+// ===== XFR-6 Security Audit Tests: Multisig Parameter Validation =====
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EEmptyMultisigVectors)]
+fun test_multisig_empty_pks_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    // Empty pks vector - should fail
+    let pks = vector[];
+    let weights = vector[1u8];
+    let threshold = 1u16;
+
+    stake_frontier::set_multisig_config(
+      &mut pool,
+      &admin_cap,
+      pks,
+      weights,
+      threshold,
+      ts::ctx(&mut scenario),
+    );
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EMultisigVectorLengthMismatch)]
+fun test_multisig_length_mismatch_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    // 3 public keys but 2 weights - should fail
+    let pks = vector[
+      x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      x"02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      x"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb",
+    ];
+    let weights = vector[1u8, 1u8]; // Only 2 weights!
+    let threshold = 2u16;
+
+    stake_frontier::set_multisig_config(
+      &mut pool,
+      &admin_cap,
+      pks,
+      weights,
+      threshold,
+      ts::ctx(&mut scenario),
+    );
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EInvalidThreshold)]
+fun test_multisig_zero_threshold_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    let pks = vector[x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"];
+    let weights = vector[1u8];
+    let threshold = 0u16; // Zero threshold - should fail!
+
+    stake_frontier::set_multisig_config(
+      &mut pool,
+      &admin_cap,
+      pks,
+      weights,
+      threshold,
+      ts::ctx(&mut scenario),
+    );
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EInvalidThreshold)]
+fun test_multisig_threshold_exceeds_total_weight_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    let pks = vector[
+      x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      x"02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+    ];
+    let weights = vector[1u8, 1u8]; // Total weight = 2
+    let threshold = 5u16; // Threshold = 5 > 2 - should fail!
+
+    stake_frontier::set_multisig_config(
+      &mut pool,
+      &admin_cap,
+      pks,
+      weights,
+      threshold,
+      ts::ctx(&mut scenario),
+    );
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::ETooManySigners)]
+fun test_multisig_too_many_signers_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    // 11 public keys - exceeds MAX_SIGNER_IN_MULTISIG (10)
+    let pks = vector[
+      x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      x"02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      x"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb",
+      x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      x"02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      x"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb",
+      x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      x"02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      x"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb",
+      x"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      x"02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5", // 11th key!
+    ];
+    let weights = vector[1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8];
+    let threshold = 6u16;
+
+    stake_frontier::set_multisig_config(
+      &mut pool,
+      &admin_cap,
+      pks,
+      weights,
+      threshold,
+      ts::ctx(&mut scenario),
+    );
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EInvalidPublicKeyLength)]
+fun test_multisig_invalid_pk_length_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    // Invalid public key length (20 bytes instead of 32 or 33)
+    let pks = vector[
+      x"0279be667ef9dcbbac55a06295ce870b07029bfc", // Only 20 bytes!
+    ];
+    let weights = vector[1u8];
+    let threshold = 1u16;
+
+    stake_frontier::set_multisig_config(
+      &mut pool,
+      &admin_cap,
+      pks,
+      weights,
+      threshold,
+      ts::ctx(&mut scenario),
+    );
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+// ===== XFR-5 Security Audit Tests: 3-Step Ownership Transfer =====
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EInvalidRecipient)]
+fun test_transfer_to_zero_address_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    // Try to transfer to @0x0 - should fail
+    stake_frontier::transfer_admin_cap_begin(&mut pool, &admin_cap, @0x0, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EInvalidRecipient)]
+fun test_transfer_to_self_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    // Try to transfer to self - should fail
+    stake_frontier::transfer_admin_cap_begin(&mut pool, &admin_cap, ADMIN, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::ENotPendingOwner)]
+fun test_wrong_pending_owner_accepts_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  // Step 1: Begin transfer to USER1
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::transfer_admin_cap_begin(&mut pool, &admin_cap, USER1, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  // Step 2: USER2 tries to accept (wrong user) - should fail
+  ts::next_tx(&mut scenario, USER2);
+  {
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::accept_admin_cap(&mut pool, ts::ctx(&mut scenario));
+
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+#[expected_failure(abort_code = stake_frontier::EPendingAdminNotAccepted)]
+fun test_execute_without_acceptance_fails() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  // Step 1: Begin transfer to USER1
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::transfer_admin_cap_begin(&mut pool, &admin_cap, USER1, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  // Try to execute without USER1 accepting - should fail
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::accept_admin_cap_execute(&mut pool, admin_cap, ts::ctx(&mut scenario));
+
+    ts::return_shared(pool);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+fun test_3step_transfer_success() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  // Step 1: Begin transfer to USER1
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::transfer_admin_cap_begin(&mut pool, &admin_cap, USER1, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  // Step 2: USER1 accepts
+  ts::next_tx(&mut scenario, USER1);
+  {
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::accept_admin_cap(&mut pool, ts::ctx(&mut scenario));
+
+    ts::return_shared(pool);
+  };
+
+  // Step 3: ADMIN executes transfer
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::accept_admin_cap_execute(&mut pool, admin_cap, ts::ctx(&mut scenario));
+
+    ts::return_shared(pool);
+  };
+
+  // Verify USER1 now has AdminCap
+  ts::next_tx(&mut scenario, USER1);
+  {
+    assert!(ts::has_most_recent_for_sender<AdminCap>(&scenario), 0);
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    ts::return_to_sender(&scenario, admin_cap);
+  };
+
+  ts::end(scenario);
+}
+
+#[test]
+fun test_renounce_transfer() {
+  let mut scenario = ts::begin(ADMIN);
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let otw = test_utils::create_one_time_witness<STAKE_FRONTIER>();
+    stake_frontier::test_init(otw, ts::ctx(&mut scenario));
+  };
+
+  // Step 1: Begin transfer to USER1
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::transfer_admin_cap_begin(&mut pool, &admin_cap, USER1, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  // Cancel transfer
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    let mut pool = ts::take_shared<StakingPool>(&scenario);
+
+    stake_frontier::renounce_admin_cap_transfer(&mut pool, &admin_cap, ts::ctx(&mut scenario));
+
+    ts::return_to_sender(&scenario, admin_cap);
+    ts::return_shared(pool);
+  };
+
+  // Verify ADMIN still has AdminCap
+  ts::next_tx(&mut scenario, ADMIN);
+  {
+    assert!(ts::has_most_recent_for_sender<AdminCap>(&scenario), 0);
+    let admin_cap = ts::take_from_sender<AdminCap>(&scenario);
+    ts::return_to_sender(&scenario, admin_cap);
+  };
+
+  ts::end(scenario);
+}

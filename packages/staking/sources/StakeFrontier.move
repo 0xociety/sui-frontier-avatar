@@ -19,6 +19,19 @@ const EInputLengthMismatch: u64 = 6;
 const ENotMultiSigSender: u64 = 7;
 const EMultiSigNotConfigured: u64 = 8;
 const ENotAdmin: u64 = 9;
+const ENotPendingOwner: u64 = 10; /// Error when sender is not the pending owner
+const ENoPendingOwner: u64 = 11; /// Error when there is no pending owner to accept
+const EInvalidRecipient: u64 = 12; /// Error when recipient address is invalid (e.g., @0x0 or sender)
+const EPendingAdminNotAccepted: u64 = 13; /// Error when pending admin has not accepted the transfer yet
+const EEmptyMultisigVectors: u64 = 14; /// Error when multisig vectors are empty
+const EMultisigVectorLengthMismatch: u64 = 15; /// Error when pks and weights vectors have different lengths
+const EInvalidThreshold: u64 = 16; /// Error when threshold is 0 or exceeds total weights
+const ETooManySigners: u64 = 17; /// Error when number of signers exceeds maximum (10)
+const EInvalidPublicKeyLength: u64 = 18; /// Error when public key has invalid length
+const MAX_SIGNER_IN_MULTISIG: u64 = 10; // Multisig constants
+const ED25519_PUBLIC_KEY_LENGTH: u64 = 32; // flag 0x00
+const SECP256K1_PUBLIC_KEY_LENGTH: u64 = 33; // flag 0x01 (compressed)
+const SECP256R1_PUBLIC_KEY_LENGTH: u64 = 33; // flag 0x02 (compressed)
 
 public struct STAKE_FRONTIER has drop {}
 
@@ -90,6 +103,13 @@ public struct PauseStateChanged has copy, drop {
   actor: address,
 }
 
+/// Multisig configuration event
+public struct MultisigConfigChanged has copy, drop {
+  num_signers: u64,
+  threshold: u16,
+  actor: address,
+}
+
 public struct StakingPool has key {
   id: UID,
   is_paused: bool,
@@ -102,6 +122,9 @@ public struct StakingPool has key {
   multisig_pks: vector<vector<u8>>,
   multisig_weights: vector<u8>,
   multisig_threshold: u16,
+  // AdminCap ownership transfer (3-step pattern for security)
+  pending_admin: option::Option<address>,
+  pending_admin_accepted: bool,
 }
 
 fun init(_otw: STAKE_FRONTIER, ctx: &mut TxContext) {
@@ -116,6 +139,8 @@ fun init(_otw: STAKE_FRONTIER, ctx: &mut TxContext) {
     multisig_pks: vector::empty(),
     multisig_weights: vector::empty(),
     multisig_threshold: 0,
+    pending_admin: option::none(),
+    pending_admin_accepted: false,
   };
 
   let pool_id = object::id(&pool);
@@ -379,10 +404,94 @@ public fun set_max_stake_per_user(
   });
 }
 
-// --- MultiSig Functions ---
-/// Transfer AdminCap to another address (e.g., multisig address)
-public fun transfer_admin_cap(cap: AdminCap, recipient: address) {
-  transfer::transfer(cap, recipient);
+// --- AdminCap Ownership Transfer ---
+/// Step 1: Begin AdminCap transfer by setting pending admin
+/// The current owner initiates the transfer to a new address
+public fun transfer_admin_cap_begin(
+  pool: &mut StakingPool,
+  _cap: &AdminCap,
+  new_owner: address,
+  ctx: &TxContext,
+) {
+  // Validate new owner address
+  assert!(new_owner != @0x0, EInvalidRecipient);
+  assert!(new_owner != ctx.sender(), EInvalidRecipient);
+
+  pool.pending_admin = option::some(new_owner);
+  pool.pending_admin_accepted = false;
+
+  event::emit(CapEvent {
+    cap_type: std::string::utf8(b"AdminCap"),
+    action: std::string::utf8(b"transfer_initiated"),
+    cap_id: object::id(_cap),
+    actor: ctx.sender(),
+    recipient: option::some(new_owner),
+  });
+}
+
+/// Step 2: Accept AdminCap transfer
+/// The pending admin must call this to confirm they want to accept ownership
+public fun accept_admin_cap(pool: &mut StakingPool, ctx: &TxContext) {
+  assert!(option::is_some(&pool.pending_admin), ENoPendingOwner);
+
+  let pending = *option::borrow(&pool.pending_admin);
+  assert!(pending == ctx.sender(), ENotPendingOwner);
+
+  // Mark as accepted
+  pool.pending_admin_accepted = true;
+
+  event::emit(CapEvent {
+    cap_type: std::string::utf8(b"AdminCap"),
+    action: std::string::utf8(b"transfer_accepted"),
+    cap_id: object::id_from_address(@0x0), // No specific cap ID at this stage
+    actor: ctx.sender(),
+    recipient: option::some(ctx.sender()),
+  });
+}
+
+/// Step 3: Execute AdminCap transfer
+/// The current owner calls this after the pending admin has accepted
+/// This completes the transfer by sending AdminCap to the new owner
+public fun accept_admin_cap_execute(pool: &mut StakingPool, cap: AdminCap, ctx: &TxContext) {
+  assert!(option::is_some(&pool.pending_admin), ENoPendingOwner);
+  assert!(pool.pending_admin_accepted == true, EPendingAdminNotAccepted);
+
+  let new_owner = *option::borrow(&pool.pending_admin);
+
+  // Reset state
+  pool.pending_admin = option::none();
+  pool.pending_admin_accepted = false;
+
+  event::emit(CapEvent {
+    cap_type: std::string::utf8(b"AdminCap"),
+    action: std::string::utf8(b"transfer_completed"),
+    cap_id: object::id(&cap),
+    actor: ctx.sender(),
+    recipient: option::some(new_owner),
+  });
+
+  // Transfer AdminCap to the new owner
+  transfer::public_transfer(cap, new_owner);
+}
+
+/// Renounce pending AdminCap transfer
+/// The current owner can cancel the pending transfer at any time
+public fun renounce_admin_cap_transfer(pool: &mut StakingPool, _cap: &AdminCap, ctx: &TxContext) {
+  assert!(option::is_some(&pool.pending_admin), ENoPendingOwner);
+
+  let cancelled_recipient = *option::borrow(&pool.pending_admin);
+
+  // Reset state
+  pool.pending_admin = option::none();
+  pool.pending_admin_accepted = false;
+
+  event::emit(CapEvent {
+    cap_type: std::string::utf8(b"AdminCap"),
+    action: std::string::utf8(b"transfer_renounced"),
+    cap_id: object::id(_cap),
+    actor: ctx.sender(),
+    recipient: option::some(cancelled_recipient),
+  });
 }
 
 /// Verify that the sender is the registered multisig address
@@ -412,10 +521,57 @@ public fun set_multisig_config(
     verify_multisig_sender(pool, ctx);
   };
 
+  // Validate parameters to prevent DoS
+  let pks_len = vector::length(&pks);
+  let weights_len = vector::length(&weights);
+
+  // Check vectors are not empty
+  assert!(pks_len > 0, EEmptyMultisigVectors);
+  assert!(weights_len > 0, EEmptyMultisigVectors);
+
+  // Check maximum number of signers
+  assert!(pks_len <= MAX_SIGNER_IN_MULTISIG, ETooManySigners);
+
+  // Check vectors have same length
+  assert!(pks_len == weights_len, EMultisigVectorLengthMismatch);
+
+  // Validate each public key length
+  let mut i = 0;
+  while (i < pks_len) {
+    let pk_len = vector::length(vector::borrow(&pks, i));
+    // Valid lengths: 32 (Ed25519) or 33 (Secp256k1/Secp256r1 compressed)
+    assert!(
+      pk_len == ED25519_PUBLIC_KEY_LENGTH ||
+                pk_len == SECP256K1_PUBLIC_KEY_LENGTH ||
+                pk_len == SECP256R1_PUBLIC_KEY_LENGTH,
+      EInvalidPublicKeyLength,
+    );
+    i = i + 1;
+  };
+
+  // Calculate total weight
+  let mut total_weight: u16 = 0;
+  let mut i = 0;
+  while (i < weights_len) {
+    total_weight = total_weight + (*vector::borrow(&weights, i) as u16);
+    i = i + 1;
+  };
+
+  // Validate threshold
+  assert!(threshold > 0, EInvalidThreshold);
+  assert!(threshold <= total_weight, EInvalidThreshold);
+
   pool.multisig_pks = pks;
   pool.multisig_weights = weights;
   pool.multisig_threshold = threshold;
   pool.multisig_configured = true;
+
+  // Emit event for transparency
+  event::emit(MultisigConfigChanged {
+    num_signers: pks_len,
+    threshold,
+    actor: ctx.sender(),
+  });
 }
 
 /// Get the derived multisig address
