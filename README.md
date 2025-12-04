@@ -84,12 +84,12 @@ sui move test --filter integration
 </tr>
 <tr>
 <td>Testnet</td>
-<td><code>NOT DEPLOYED YET</code></td>
-<td><code>NOT DEPLOYED YET</code></td>
+<td><code>0xcbc231288453379abec7784fe4fabe86048e47effa2b8da663f50a8950da04e4</code></td>
+<td><code>0x29b61ab1b3ba267b89575df8ce3c74d68b081dc14a7a9b3c19dae0f68e4f0449</code></td>
 </tr>
 <tr>
 <td>Mainnet</td>
-<td><code>NOT DEPLOYED YET</code></td>
-<td><code>NOT DEPLOYED YET</code></td>
+<td><code>0x42c2cca562748d88490acb58109d4f8621ac3e170346aa60c6e52f7c50366546</code></td>
+<td><code>0xbc484f89bb441717705524895db9f49c21b5a872849f2e2dd4a73df7dd10d5b8</code></td>
 </tr>
 </table>
